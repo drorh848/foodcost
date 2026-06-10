@@ -818,10 +818,12 @@ function renderSettings() {
 }
 
 async function clearAll() {
+  const pwd = prompt('הזן סיסמה למחיקת כל הנתונים:');
+  if (pwd === null) return;
+  if (pwd !== '56789') { toast('❌ סיסמה שגויה'); return; }
   if (!confirm('בטוח? כל הנתונים ימחקו לצמיתות!')) return;
   data = { suppliers:[], entries:[], trash:[] };
   saveLocal();
-  // מחק גם מ-Firebase
   if (window.fbRemove) {
     await window.fbRemove('foodcost/entries');
     await window.fbRemove('foodcost/trash');
