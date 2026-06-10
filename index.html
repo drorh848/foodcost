@@ -371,14 +371,19 @@ window.addEventListener('load', async () => {
     const snap = await get(ref(db, 'foodcost'));
     if (snap.exists()) {
       const fbData = snap.val();
-      if (fbData.suppliers) data.suppliers = Object.values(fbData.suppliers);
-      if (fbData.entries)   data.entries   = Object.values(fbData.entries).sort((a,b) => b.date.localeCompare(a.date));
-      if (fbData.trash)     data.trash     = Object.values(fbData.trash);
+      // החלף לגמרי — לא ממזג
+      data.suppliers = fbData.suppliers ? Object.values(fbData.suppliers) : [];
+      data.entries   = fbData.entries   ? Object.values(fbData.entries).sort((a,b) => b.date.localeCompare(a.date)) : [];
+      data.trash     = fbData.trash     ? Object.values(fbData.trash) : [];
       saveLocal();
+    } else {
+      // אין ב-Firebase — שמור את מה שיש מקומית
+      await saveAll();
     }
     setSyncStatus('ok');
   } catch(e) {
     setSyncStatus('error');
+    console.error(e);
   }
   renderSettings();
   renderChips();
@@ -815,7 +820,12 @@ function renderSettings() {
 async function clearAll() {
   if (!confirm('בטוח? כל הנתונים ימחקו לצמיתות!')) return;
   data = { suppliers:[], entries:[], trash:[] };
-  await saveAll();
+  saveLocal();
+  // מחק גם מ-Firebase
+  if (window.fbRemove) {
+    await window.fbRemove('foodcost/entries');
+    await window.fbRemove('foodcost/trash');
+  }
   renderSettings();
   toast('🗑️ כל הנתונים נמחקו');
 }
@@ -948,7 +958,7 @@ async function importExcel(event) {
       const rows = XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
       if (rows.length<2) { toast('❌ קובץ לא תקין'); return; }
 
-      const headers     = rows[0];
+      const headers      = rows[0];
       const supplierCols = [];
       let   otherColIdx  = -1;
 
@@ -969,7 +979,11 @@ async function importExcel(event) {
         }
       });
 
-      let imported=0, skipped=0;
+      // ── החלף הכל ── מחק נתונים ישנים
+      data.entries = [];
+      data.trash   = [];
+
+      let imported = 0;
       for (let r=1;r<rows.length;r++) {
         const row      = rows[r];
         const dateCell = row[0];
@@ -988,8 +1002,6 @@ async function importExcel(event) {
         supplierCols.forEach(({name,colIndex})=>{
           const val = parseFloat(row[colIndex]);
           if (!val||val<=0) return;
-          const dup = data.entries.find(e=>e.date===dateStr&&e.supplierName===name&&e.amount===val&&e.type==='regular'&&!e.deleted);
-          if (dup) { skipped++; return; }
           const sup = data.suppliers.find(s=>s.name===name);
           data.entries.push({
             id:'e_'+Date.now()+'_'+Math.random().toString(36).slice(2),
@@ -1003,15 +1015,12 @@ async function importExcel(event) {
         if (otherColIdx>=0) {
           const otherVal = parseFloat(row[otherColIdx]);
           if (otherVal>0) {
-            const dup = data.entries.find(e=>e.date===dateStr&&e.type==='oneoff'&&e.amount===otherVal&&!e.deleted);
-            if (!dup) {
-              data.entries.push({
-                id:'e_'+Date.now()+'_'+Math.random().toString(36).slice(2),
-                date:dateStr, amount:otherVal, note:'יובא מאקסל', type:'oneoff', deleted:false,
-                supplierName:'אחר', supplierEmoji:'🛒'
-              });
-              imported++;
-            } else skipped++;
+            data.entries.push({
+              id:'e_'+Date.now()+'_'+Math.random().toString(36).slice(2),
+              date:dateStr, amount:otherVal, note:'יובא מאקסל', type:'oneoff', deleted:false,
+              supplierName:'אחר', supplierEmoji:'🛒'
+            });
+            imported++;
           }
         }
       }
@@ -1021,7 +1030,6 @@ async function importExcel(event) {
       document.getElementById('import-input').value='';
       let msg = `✅ יובאו ${imported} רשומות`;
       if (newSuppliers) msg += ` + ${newSuppliers} ספקים חדשים`;
-      if (skipped)      msg += ` (${skipped} כפילויות דולגו)`;
       toast(msg);
       renderSettings();
     } catch(e) {
