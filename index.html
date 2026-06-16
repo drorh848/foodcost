@@ -323,6 +323,61 @@
   <div class="sheet-body"><div class="sheet-grid" id="sheet-grid"></div></div>
 </div>
 
+<!-- EDIT MODAL -->
+<div class="sheet-overlay" id="edit-overlay" onclick="closeEdit()"></div>
+<div class="sheet" id="edit-sheet">
+  <div class="sheet-handle"></div>
+  <div class="sheet-header">
+    <div class="sheet-title">✏️ עריכת הוצאה</div>
+    <button class="sheet-close" onclick="closeEdit()">סגור ✕</button>
+  </div>
+  <div class="sheet-body">
+    <input type="hidden" id="edit-id">
+    <div class="form-group">
+      <label>תאריך</label>
+      <div class="date-wrap">
+        <input type="date" id="edit-date" class="date-input-hidden" onchange="updateEditDateDisplay()">
+        <div id="edit-date-display" class="date-display" onclick="openEditDatePicker()">בחר תאריך...</div>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>הערה</label>
+      <input type="text" id="edit-note" placeholder="מה נקנה?">
+    </div>
+    <div class="form-group">
+      <label>סכום</label>
+      <div class="amount-wrap">
+        <span class="amount-currency">₪</span>
+        <input type="number" id="edit-amount" placeholder="0.00" min="0" step="0.01">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>חשבונית</label>
+      <div class="invoice-upload-area" id="edit-upload-area">
+        <input type="file" id="edit-invoice-input" accept="image/*" capture="environment" onchange="handleEditInvoiceSelect(event)">
+        <span class="upload-icon">📸</span>
+        <div class="upload-text">צלם חשבונית או העלה תמונה</div>
+      </div>
+      <div class="invoice-preview-wrap" id="edit-invoice-preview-wrap" style="display:none">
+        <img class="invoice-preview-img" id="edit-invoice-preview-img" src="" alt="חשבונית" onclick="openLightbox(this.src)">
+        <button class="invoice-remove" onclick="removeEditInvoice()">✕ הסר</button>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="saveEdit()">💾 שמור שינויים</button>
+  </div>
+</div>
+
+<!-- SUPPLIER DETAIL MODAL -->
+<div class="sheet-overlay" id="supdetail-overlay" onclick="closeSupplierDetail()"></div>
+<div class="sheet" id="supdetail-sheet" style="max-height:88vh">
+  <div class="sheet-handle"></div>
+  <div class="sheet-header">
+    <div class="sheet-title" id="supdetail-title">ספק</div>
+    <button class="sheet-close" onclick="closeSupplierDetail()">סגור ✕</button>
+  </div>
+  <div class="sheet-body" id="supdetail-body"></div>
+</div>
+
 <!-- LIGHTBOX -->
 <div class="lightbox" id="lightbox" onclick="closeLightbox()">
   <button class="lightbox-close" onclick="closeLightbox()">✕ סגור</button>
@@ -578,6 +633,7 @@ async function addEntry() {
   }
 
   data.entries.unshift(entry);
+  data.entries.sort((a,b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   await saveAll();
 
   document.getElementById('entry-amount').value = '';
@@ -624,6 +680,7 @@ function renderHistory() {
         </div>
         <div class="entry-right">
           <div class="entry-amount">₪${fmtAmount(e.amount)}</div>
+          <button class="btn btn-sm" onclick="openEdit('${e.id}')" style="padding:5px 8px">✏️</button>
           <button class="btn btn-sm btn-danger" onclick="deleteEntry('${e.id}')" style="padding:5px 8px">🗑</button>
         </div>
       </div>
@@ -713,6 +770,191 @@ async function permanentDelete(id) {
   toast('🗑️ נמחק לצמיתות');
 }
 
+// ── EDIT ENTRY ─────────────────────────────────────────
+let editInvoiceBase64 = null;
+
+function openEdit(id) {
+  const e = data.entries.find(x => x.id === id);
+  if (!e) return;
+  document.getElementById('edit-id').value     = id;
+  document.getElementById('edit-date').value   = e.date;
+  document.getElementById('edit-note').value   = e.note || '';
+  document.getElementById('edit-amount').value = e.amount;
+  updateEditDateDisplay();
+
+  editInvoiceBase64 = e.invoice || null;
+  if (e.invoice) {
+    document.getElementById('edit-invoice-preview-img').src = e.invoice;
+    document.getElementById('edit-upload-area').style.display = 'none';
+    document.getElementById('edit-invoice-preview-wrap').style.display = 'block';
+  } else {
+    document.getElementById('edit-upload-area').style.display = 'block';
+    document.getElementById('edit-invoice-preview-wrap').style.display = 'none';
+  }
+
+  document.getElementById('edit-overlay').classList.add('open');
+  document.getElementById('edit-sheet').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeEdit() {
+  document.getElementById('edit-overlay').classList.remove('open');
+  document.getElementById('edit-sheet').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function openEditDatePicker() {
+  const inp = document.getElementById('edit-date');
+  try { inp.showPicker(); } catch(e) { inp.click(); }
+}
+
+function updateEditDateDisplay() {
+  const val  = document.getElementById('edit-date').value;
+  const disp = document.getElementById('edit-date-display');
+  if (val) {
+    const [y,m,d] = val.split('-');
+    disp.textContent = `${d}/${m}/${y}`;
+    disp.classList.add('has-value');
+  } else {
+    disp.textContent = 'בחר תאריך...';
+    disp.classList.remove('has-value');
+  }
+}
+
+function handleEditInvoiceSelect(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const MAX = 1200;
+      let w = img.width, h = img.height;
+      if (w > MAX) { h = Math.round(h*MAX/w); w = MAX; }
+      if (h > MAX) { w = Math.round(w*MAX/h); h = MAX; }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      editInvoiceBase64 = canvas.toDataURL('image/jpeg', 0.75);
+      document.getElementById('edit-invoice-preview-img').src = editInvoiceBase64;
+      document.getElementById('edit-upload-area').style.display = 'none';
+      document.getElementById('edit-invoice-preview-wrap').style.display = 'block';
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeEditInvoice() {
+  editInvoiceBase64 = null;
+  document.getElementById('edit-invoice-input').value = '';
+  document.getElementById('edit-upload-area').style.display = 'block';
+  document.getElementById('edit-invoice-preview-wrap').style.display = 'none';
+}
+
+async function saveEdit() {
+  const id     = document.getElementById('edit-id').value;
+  const date   = document.getElementById('edit-date').value;
+  const amount = parseFloat(document.getElementById('edit-amount').value);
+  const note   = document.getElementById('edit-note').value.trim();
+  if (!date)              { toast('⚠️ בחר תאריך'); return; }
+  if (!amount||amount<=0) { toast('⚠️ הזן סכום תקין'); return; }
+
+  const e = data.entries.find(x => x.id === id);
+  if (!e) return;
+  e.date   = date;
+  e.amount = amount;
+  e.note   = note;
+  if (editInvoiceBase64) e.invoice = editInvoiceBase64;
+  else delete e.invoice;
+
+  data.entries.sort((a,b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  await saveAll();
+  closeEdit();
+  renderHistory();
+  renderSummary();
+  // אם חלון ספק פתוח — רענן אותו
+  if (currentSupplierDetailId) openSupplierDetail(currentSupplierDetailId);
+  toast('✅ השינויים נשמרו');
+}
+
+// ── SUPPLIER DETAIL ────────────────────────────────────
+let currentSupplierDetailId = null;
+
+function openSupplierDetail(supplierId) {
+  currentSupplierDetailId = supplierId;
+  const active   = data.entries.filter(e => !e.deleted && e.supplierId === supplierId);
+  const filtered = filterEntries(active, summaryFilter);
+  const sup      = data.suppliers.find(s => s.id === supplierId);
+  const total    = filtered.reduce((a,e) => a+e.amount, 0);
+
+  document.getElementById('supdetail-title').textContent = `${sup?.emoji||'🏭'} ${sup?.name||''}`;
+
+  const body = document.getElementById('supdetail-body');
+  if (!filtered.length) {
+    body.innerHTML = '<div class="empty-state"><span class="icon">📭</span>אין הוצאות</div>';
+  } else {
+    body.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+        <span style="font-weight:700">${filtered.length} רכישות</span>
+        <span style="font-weight:900;color:var(--accent);font-size:18px">₪${fmtAmount(total)}</span>
+      </div>
+      ${filtered.map(e=>`
+        <div class="entry-item">
+          <div class="entry-main">
+            <div class="entry-left">
+              <div class="entry-avatar">${e.supplierEmoji}</div>
+              <div>
+                <div class="entry-name">${formatDate(e.date)}</div>
+                <div class="entry-meta">${e.note||'ללא הערה'}</div>
+                ${e.invoice?`<span class="invoice-badge" onclick="openLightbox('${e.id}')" style="margin-top:5px;display:inline-flex">📎 חשבונית</span>`:''}
+              </div>
+            </div>
+            <div class="entry-right">
+              <div class="entry-amount">₪${fmtAmount(e.amount)}</div>
+              <button class="btn btn-sm" onclick="openEdit('${e.id}')" style="padding:5px 8px">✏️</button>
+              <button class="btn btn-sm btn-danger" onclick="deleteEntryFromDetail('${e.id}')" style="padding:5px 8px">🗑</button>
+            </div>
+          </div>
+          ${e.invoice?`
+            <div class="entry-invoice-thumb" onclick="openLightbox('${e.id}')">
+              <img src="${e.invoice}" alt="חשבונית" loading="lazy">
+              <div class="thumb-label">📸 לחץ להגדלה</div>
+            </div>`:''}
+        </div>`).join('')}`;
+  }
+
+  document.getElementById('supdetail-overlay').classList.add('open');
+  document.getElementById('supdetail-sheet').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeSupplierDetail() {
+  currentSupplierDetailId = null;
+  document.getElementById('supdetail-overlay').classList.remove('open');
+  document.getElementById('supdetail-sheet').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+async function deleteEntryFromDetail(id) {
+  const pwd = prompt('הזן סיסמה למחיקה:');
+  if (pwd === null) return;
+  if (pwd !== DELETE_PASSWORD) { toast('❌ סיסמה שגויה'); return; }
+  const entry = data.entries.find(e => e.id === id);
+  if (!entry) return;
+  entry.deleted   = true;
+  entry.deletedAt = Date.now();
+  data.trash.unshift({ ...entry });
+  data.entries = data.entries.filter(e => e.id !== id);
+  await saveAll();
+  renderHistory();
+  renderSettings();
+  const sid = currentSupplierDetailId;
+  renderSummary();
+  if (sid) openSupplierDetail(sid);
+  toast('🗑️ הוצאה הועברה לסל המיחזור');
+}
+
 // ── LIGHTBOX ───────────────────────────────────────────
 function openLightbox(idOrSrc) {
   let src = idOrSrc;
@@ -744,15 +986,15 @@ function renderSummary() {
   const regular    = filtered.filter(e => e.type==='regular');
   const bySupplier = {};
   regular.forEach(e => {
-    if (!bySupplier[e.supplierId]) bySupplier[e.supplierId] = {name:e.supplierName,emoji:e.supplierEmoji,total:0,count:0};
+    if (!bySupplier[e.supplierId]) bySupplier[e.supplierId] = {id:e.supplierId,name:e.supplierName,emoji:e.supplierEmoji,total:0,count:0};
     bySupplier[e.supplierId].total += e.amount;
     bySupplier[e.supplierId].count++;
   });
   const supArr = Object.values(bySupplier).sort((a,b) => b.total-a.total);
   const maxSup = supArr[0]?.total || 1;
   document.getElementById('supplier-bars').innerHTML = supArr.length ? supArr.map(s=>`
-    <div class="supplier-bar-item">
-      <div class="bar-header"><div class="bar-name">${s.emoji} ${s.name}</div><div class="bar-amount">₪${fmtAmount(s.total)}</div></div>
+    <div class="supplier-bar-item" onclick="openSupplierDetail('${s.id}')" style="cursor:pointer">
+      <div class="bar-header"><div class="bar-name">${s.emoji} ${s.name} <span style="color:var(--text2);font-size:11px">›</span></div><div class="bar-amount">₪${fmtAmount(s.total)}</div></div>
       <div class="bar-track"><div class="bar-fill" style="width:${(s.total/maxSup*100).toFixed(1)}%"></div></div>
       <div class="bar-count">${s.count} רכישות</div>
     </div>`).join('') : '<div style="color:var(--text2);font-size:13px">אין נתוני ספקים קבועים</div>';
