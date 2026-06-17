@@ -148,6 +148,18 @@
   .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--green); color:#000; border-radius:10px; padding:12px 24px; font-weight:700; font-size:14px; opacity:0; transition:.3s; z-index:9999; white-space:nowrap; }
   .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
 
+  /* LOGIN */
+  #login-screen { position:fixed; inset:0; z-index:9998; background:var(--bg); display:flex; align-items:center; justify-content:center; padding:24px; }
+  .login-card { background:var(--surface); border:1px solid var(--border); border-radius:20px; padding:32px 24px; width:100%; max-width:380px; text-align:center; }
+  .login-logo { font-size:48px; margin-bottom:8px; }
+  .login-title { font-size:24px; font-weight:900; margin-bottom:4px; }
+  .login-title span { color:var(--accent); }
+  .login-sub { font-size:13px; color:var(--text2); margin-bottom:24px; }
+  .login-card input { margin-bottom:14px; text-align:right; }
+  .login-error { color:var(--red); font-size:13px; margin-bottom:12px; min-height:18px; }
+  #app-content { display:none; }
+  #app-content.ready { display:block; }
+
   @media(max-width:480px) {
     .form-row { grid-template-columns:1fr; }
     .nav-tab { padding:7px 9px; font-size:12px; }
@@ -156,6 +168,21 @@
 </style>
 </head>
 <body>
+
+<!-- LOGIN SCREEN -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">💰</div>
+    <div class="login-title">מעקב <span>הוצאות</span></div>
+    <div class="login-sub">התחבר כדי להמשיך</div>
+    <input type="email" id="login-email" placeholder="אימייל" autocomplete="username">
+    <input type="password" id="login-password" placeholder="סיסמה" autocomplete="current-password">
+    <div class="login-error" id="login-error"></div>
+    <button class="btn btn-primary" onclick="doLogin()">🔓 כניסה</button>
+  </div>
+</div>
+
+<div id="app-content">
 
 <nav class="nav">
   <div class="nav-logo">💰 <span>הוצאות</span></div>
@@ -312,6 +339,8 @@
   </div>
 </div>
 
+</div><!-- /app-content -->
+
 <!-- BOTTOM SHEET -->
 <div class="sheet-overlay" id="sheet-overlay" onclick="closeSheet()"></div>
 <div class="sheet" id="sheet">
@@ -390,6 +419,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getDatabase, ref, set, get, onValue, remove } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDiPgHnxu8-9qdbqvg0g2msxl6LvuyQTMc",
@@ -401,38 +431,61 @@ const firebaseConfig = {
   appId: "1:452526929011:web:201c1d451700e46c042606"
 };
 
-const app = initializeApp(firebaseConfig);
-const db  = getDatabase(app);
+const app  = initializeApp(firebaseConfig);
+const db   = getDatabase(app);
+const auth = getAuth(app);
 
-// ── FIREBASE HELPERS ────────────────────────────────────
+// שמור התחברות תמיד
+setPersistence(auth, browserLocalPersistence);
+
 window.fbSet = async (path, value) => {
-  try {
-    await set(ref(db, path), value);
-    setSyncStatus('ok');
-  } catch(e) {
-    setSyncStatus('error');
-    console.error(e);
-  }
+  try { await set(ref(db, path), value); setSyncStatus('ok'); }
+  catch(e) { setSyncStatus('error'); console.error(e); }
 };
-
 window.fbRemove = async (path) => {
   try { await remove(ref(db, path)); } catch(e) { console.error(e); }
 };
 
-// ── LOAD DATA FROM FIREBASE ON START ───────────────────
-window.addEventListener('load', async () => {
+// ── LOGIN ──────────────────────────────────────────────
+window.doLogin = async () => {
+  const email = document.getElementById('login-email').value.trim();
+  const pass  = document.getElementById('login-password').value;
+  const err   = document.getElementById('login-error');
+  err.textContent = '';
+  if (!email || !pass) { err.textContent = 'הזן אימייל וסיסמה'; return; }
+  try {
+    await signInWithEmailAndPassword(auth, email, pass);
+    // onAuthStateChanged יטפל בהצגה
+  } catch(e) {
+    err.textContent = 'אימייל או סיסמה שגויים';
+  }
+};
+
+// ── AUTH STATE ─────────────────────────────────────────
+onAuthStateChanged(auth, async (user) => {
+  if (user) {
+    // מחובר — הצג אפליקציה
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app-content').classList.add('ready');
+    await loadFromFirebase();
+  } else {
+    // לא מחובר — הצג מסך כניסה
+    document.getElementById('login-screen').style.display = 'flex';
+    document.getElementById('app-content').classList.remove('ready');
+  }
+});
+
+async function loadFromFirebase() {
   setSyncStatus('pending');
   try {
     const snap = await get(ref(db, 'foodcost'));
     if (snap.exists()) {
       const fbData = snap.val();
-      // החלף לגמרי — לא ממזג
       data.suppliers = fbData.suppliers ? Object.values(fbData.suppliers) : [];
       data.entries   = fbData.entries   ? Object.values(fbData.entries).sort((a,b) => b.date.localeCompare(a.date)) : [];
       data.trash     = fbData.trash     ? Object.values(fbData.trash) : [];
       saveLocal();
     } else {
-      // אין ב-Firebase — שמור את מה שיש מקומית
       await saveAll();
     }
     setSyncStatus('ok');
@@ -442,15 +495,19 @@ window.addEventListener('load', async () => {
   }
   renderSettings();
   renderChips();
-});
+}
 
 function setSyncStatus(status) {
   const badge = document.getElementById('sync-badge');
   if (!badge) return;
-  if (status === 'ok')      { badge.textContent = '✅ מסונכרן';    badge.className = 'sync-badge sync-ok'; }
-  if (status === 'pending') { badge.textContent = '⏳ מתחבר...';  badge.className = 'sync-badge sync-pending'; }
-  if (status === 'error')   { badge.textContent = '❌ שגיאה';     badge.className = 'sync-badge sync-error'; }
+  if (status === 'ok')      { badge.textContent = '✅ מסונכרן';   badge.className = 'sync-badge sync-ok'; }
+  if (status === 'pending') { badge.textContent = '⏳ מתחבר...'; badge.className = 'sync-badge sync-pending'; }
+  if (status === 'error')   { badge.textContent = '❌ שגיאה';    badge.className = 'sync-badge sync-error'; }
 }
+window.setSyncStatus = setSyncStatus;
+
+// אפשר כניסה עם Enter
+document.getElementById('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') window.doLogin(); });
 </script>
 
 <script>
