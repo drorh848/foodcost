@@ -266,10 +266,31 @@
 <!-- SUMMARY -->
 <div id="page-summary" class="page">
   <div class="section-title">📊 סיכום</div>
-  <div class="filter-row" id="summary-filters">
-    <button class="filter-chip active" onclick="setSummaryFilter('all',this)">הכל</button>
-    <button class="filter-chip" onclick="setSummaryFilter('week',this)">שבוע</button>
-    <button class="filter-chip" onclick="setSummaryFilter('month',this)">חודש</button>
+  <div class="card" style="padding:16px">
+    <div style="margin-bottom:12px">
+      <label style="margin-bottom:6px">חודש</label>
+      <select id="summary-month-sel" onchange="onSummaryMonthChange()"></select>
+    </div>
+    <button class="filter-chip" id="custom-range-toggle" onclick="toggleCustomRange()" style="width:100%;text-align:center">📅 טווח תאריכים מותאם</button>
+    <div id="custom-range-box" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <label style="margin-bottom:6px">מתאריך</label>
+          <div class="date-wrap">
+            <input type="date" id="range-from" class="date-input-hidden" onchange="updateRangeDisplay('from')">
+            <div id="range-from-display" class="date-display" onclick="openRangePicker('from')" style="font-size:13px;padding:10px">בחר...</div>
+          </div>
+        </div>
+        <div>
+          <label style="margin-bottom:6px">עד תאריך</label>
+          <div class="date-wrap">
+            <input type="date" id="range-to" class="date-input-hidden" onchange="updateRangeDisplay('to')">
+            <div id="range-to-display" class="date-display" onclick="openRangePicker('to')" style="font-size:13px;padding:10px">בחר...</div>
+          </div>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="applyCustomRange()" style="margin-top:12px;padding:10px">🔍 הצג טווח</button>
+    </div>
   </div>
   <div class="stats-grid">
     <div class="stat-card"><div class="stat-label">סה"כ הוצאות</div><div class="stat-value accent" id="sum-total">₪0</div></div>
@@ -940,8 +961,7 @@ let currentSupplierDetailId = null;
 
 function openSupplierDetail(supplierId) {
   currentSupplierDetailId = supplierId;
-  const active   = data.entries.filter(e => !e.deleted && e.supplierId === supplierId);
-  const filtered = filterEntries(active, summaryFilter);
+  const filtered = getSummaryEntries().filter(e => e.supplierId === supplierId);
   const sup      = data.suppliers.find(s => s.id === supplierId);
   const total    = filtered.reduce((a,e) => a+e.amount, 0);
 
@@ -1026,16 +1046,87 @@ function openLightbox(idOrSrc) {
 function closeLightbox() { document.getElementById('lightbox').classList.remove('open'); }
 
 // ── SUMMARY ────────────────────────────────────────────
-function setSummaryFilter(f, el) {
-  summaryFilter = f;
-  document.querySelectorAll('#summary-filters .filter-chip').forEach(c => c.classList.remove('active'));
-  el.classList.add('active');
+let summaryMode  = 'month';        // 'month' or 'range'
+let summaryMonth = todayStr().slice(0,7);
+let rangeFrom    = null;
+let rangeTo      = null;
+
+function populateSummaryMonths() {
+  const sel = document.getElementById('summary-month-sel');
+  if (!sel) return;
+  const active = data.entries.filter(e => !e.deleted);
+  const months = [...new Set(active.map(e => e.date.slice(0,7)))].sort().reverse();
+  const cur    = todayStr().slice(0,7);
+  if (!months.includes(cur)) months.unshift(cur);
+  sel.innerHTML = months.map(m => {
+    const [y,mo] = m.split('-');
+    const label  = new Date(y,mo-1,1).toLocaleDateString('he-IL',{month:'long',year:'numeric'});
+    return `<option value="${m}" ${m===summaryMonth?'selected':''}>${label}</option>`;
+  }).join('');
+}
+
+function onSummaryMonthChange() {
+  summaryMonth = document.getElementById('summary-month-sel').value;
+  summaryMode  = 'month';
+  document.getElementById('custom-range-box').style.display = 'none';
+  document.getElementById('custom-range-toggle').classList.remove('active');
   renderSummary();
 }
 
+function toggleCustomRange() {
+  const box = document.getElementById('custom-range-box');
+  const toggle = document.getElementById('custom-range-toggle');
+  if (box.style.display === 'none') {
+    box.style.display = 'block';
+    toggle.classList.add('active');
+    if (!rangeFrom) { document.getElementById('range-from').value = summaryMonth + '-01'; updateRangeDisplay('from'); }
+    if (!rangeTo)   { document.getElementById('range-to').value = todayStr(); updateRangeDisplay('to'); }
+  } else {
+    box.style.display = 'none';
+    toggle.classList.remove('active');
+  }
+}
+
+function openRangePicker(which) {
+  const inp = document.getElementById('range-' + which);
+  try { inp.showPicker(); } catch(e) { inp.click(); }
+}
+
+function updateRangeDisplay(which) {
+  const val  = document.getElementById('range-' + which).value;
+  const disp = document.getElementById('range-' + which + '-display');
+  if (val) {
+    const [y,m,d] = val.split('-');
+    disp.textContent = `${d}/${m}/${y}`;
+    disp.classList.add('has-value');
+  } else {
+    disp.textContent = 'בחר...';
+    disp.classList.remove('has-value');
+  }
+}
+
+function applyCustomRange() {
+  rangeFrom = document.getElementById('range-from').value;
+  rangeTo   = document.getElementById('range-to').value;
+  if (!rangeFrom || !rangeTo) { toast('⚠️ בחר שני תאריכים'); return; }
+  if (rangeFrom > rangeTo)    { toast('⚠️ תאריך התחלה אחרי הסיום'); return; }
+  summaryMode = 'range';
+  renderSummary();
+  toast('🔍 מציג טווח מותאם');
+}
+
+function getSummaryEntries() {
+  const active = data.entries.filter(e => !e.deleted);
+  if (summaryMode === 'range' && rangeFrom && rangeTo) {
+    return active.filter(e => e.date >= rangeFrom && e.date <= rangeTo);
+  }
+  // month mode
+  return active.filter(e => e.date.startsWith(summaryMonth));
+}
+
 function renderSummary() {
-  const active   = data.entries.filter(e => !e.deleted);
-  const filtered = filterEntries(active, summaryFilter);
+  populateSummaryMonths();
+  const filtered = getSummaryEntries();
   const total    = filtered.reduce((a,e) => a+e.amount, 0);
   document.getElementById('sum-total').textContent = '₪'+fmtAmount(total);
   document.getElementById('sum-count').textContent = filtered.length;
