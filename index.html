@@ -439,7 +439,7 @@
 <!-- FIREBASE -->
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getDatabase, ref, set, get, onValue, remove } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+import { getDatabase, ref, set, get, remove, onValue } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const firebaseConfig = {
@@ -456,15 +456,32 @@ const app  = initializeApp(firebaseConfig);
 const db   = getDatabase(app);
 const auth = getAuth(app);
 
-// שמור התחברות תמיד
 setPersistence(auth, browserLocalPersistence);
 
+let isLoggedIn   = false;
+let firstLoadDone = false;
+
+// ── כתיבה ל-Firebase (עובד גם אופליין — Firebase מתור ומסנכרן אוטומטית) ──
 window.fbSet = async (path, value) => {
-  try { await set(ref(db, path), value); setSyncStatus('ok'); }
-  catch(e) { setSyncStatus('error'); console.error(e); }
+  if (!isLoggedIn) return;
+  try {
+    if (navigator.onLine) {
+      await set(ref(db, path), value);
+      setSyncStatus('ok');
+    } else {
+      // אין רשת — Firebase יסנכרן כשתחזור
+      set(ref(db, path), value);
+      setSyncStatus('offline');
+    }
+  } catch(e) {
+    setSyncStatus('offline');
+    console.error(e);
+  }
 };
+
 window.fbRemove = async (path) => {
-  try { await remove(ref(db, path)); } catch(e) { console.error(e); }
+  if (!isLoggedIn) return;
+  try { remove(ref(db, path)); } catch(e) { console.error(e); }
 };
 
 // ── LOGIN ──────────────────────────────────────────────
@@ -474,58 +491,96 @@ window.doLogin = async () => {
   const err   = document.getElementById('login-error');
   err.textContent = '';
   if (!email || !pass) { err.textContent = 'הזן אימייל וסיסמה'; return; }
+  if (!navigator.onLine) {
+    err.textContent = 'כניסה ראשונה דורשת אינטרנט';
+    return;
+  }
   try {
     await signInWithEmailAndPassword(auth, email, pass);
-    // onAuthStateChanged יטפל בהצגה
   } catch(e) {
     err.textContent = 'אימייל או סיסמה שגויים';
   }
 };
 
 // ── AUTH STATE ─────────────────────────────────────────
-onAuthStateChanged(auth, async (user) => {
-  if (user) {
-    // מחובר — הצג אפליקציה
+// אם Firebase איטי (רשת חלשה) והתחברה בעבר — הכנס אחרי 3 שניות
+let authResolved = false;
+setTimeout(() => {
+  if (!authResolved && localStorage.getItem('wasLoggedIn') === 'yes') {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app-content').classList.add('ready');
-    await loadFromFirebase();
+    setSyncStatus('offline');
+  }
+}, 3000);
+
+onAuthStateChanged(auth, async (user) => {
+  authResolved = true;
+  if (user) {
+    isLoggedIn = true;
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app-content').classList.add('ready');
+    if (!firstLoadDone) {
+      firstLoadDone = true;
+      startRealtimeSync();
+    }
   } else {
-    // לא מחובר — הצג מסך כניסה
-    document.getElementById('login-screen').style.display = 'flex';
-    document.getElementById('app-content').classList.remove('ready');
+    isLoggedIn = false;
+    // אם יש נתונים מקומיים ואין רשת — כנראה מחובר אבל אופליין, אל תזרוק החוצה
+    if (!navigator.onLine && localStorage.getItem('wasLoggedIn') === 'yes') {
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('app-content').classList.add('ready');
+    } else {
+      document.getElementById('login-screen').style.display = 'flex';
+      document.getElementById('app-content').classList.remove('ready');
+    }
   }
 });
 
-async function loadFromFirebase() {
-  setSyncStatus('pending');
-  try {
-    const snap = await get(ref(db, 'foodcost'));
+// ── סנכרון בזמן אמת (טוען מ-Firebase ומאזין לשינויים) ──
+function startRealtimeSync() {
+  localStorage.setItem('wasLoggedIn', 'yes');
+  setSyncStatus(navigator.onLine ? 'pending' : 'offline');
+
+  // האזנה רציפה — כל שינוי ב-Firebase יורד מיד
+  onValue(ref(db, 'foodcost'), (snap) => {
     if (snap.exists()) {
       const fbData = snap.val();
+      // מיזוג חכם: Firebase הוא מקור האמת כשמחובר
       data.suppliers = fbData.suppliers ? Object.values(fbData.suppliers) : [];
       data.entries   = fbData.entries   ? Object.values(fbData.entries).sort((a,b) => b.date.localeCompare(a.date)) : [];
       data.trash     = fbData.trash     ? Object.values(fbData.trash) : [];
       saveLocal();
-    } else {
-      await saveAll();
+      refreshCurrentView();
     }
-    setSyncStatus('ok');
-  } catch(e) {
-    setSyncStatus('error');
-    console.error(e);
-  }
-  renderSettings();
-  renderChips();
+    setSyncStatus(navigator.onLine ? 'ok' : 'offline');
+  }, (err) => {
+    // שגיאה (אין רשת) — עובד מ-localStorage
+    setSyncStatus('offline');
+    console.warn('Firebase offline, using local data');
+  });
+}
+
+function refreshCurrentView() {
+  const active = document.querySelector('.page.active');
+  if (!active) return;
+  if (active.id === 'page-history')  renderHistory();
+  if (active.id === 'page-summary')  renderSummary();
+  if (active.id === 'page-settings') renderSettings();
 }
 
 function setSyncStatus(status) {
   const badge = document.getElementById('sync-badge');
   if (!badge) return;
-  if (status === 'ok')      { badge.textContent = '✅ מסונכרן';   badge.className = 'sync-badge sync-ok'; }
-  if (status === 'pending') { badge.textContent = '⏳ מתחבר...'; badge.className = 'sync-badge sync-pending'; }
-  if (status === 'error')   { badge.textContent = '❌ שגיאה';    badge.className = 'sync-badge sync-error'; }
+  if (status === 'ok')      { badge.textContent = '✅ מסונכרן';        badge.className = 'sync-badge sync-ok'; }
+  if (status === 'pending') { badge.textContent = '⏳ מתחבר...';      badge.className = 'sync-badge sync-pending'; }
+  if (status === 'offline') { badge.textContent = '📴 אופליין (ישמר)'; badge.className = 'sync-badge sync-pending'; }
+  if (status === 'error')   { badge.textContent = '❌ שגיאה';         badge.className = 'sync-badge sync-error'; }
 }
 window.setSyncStatus = setSyncStatus;
+
+// ── זיהוי חזרת רשת ──
+window.addEventListener('online',  () => { setSyncStatus('ok');      toast('🌐 האינטרנט חזר — מסנכרן'); });
+window.addEventListener('offline', () => { setSyncStatus('offline'); });
 
 // אפשר כניסה עם Enter
 document.getElementById('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') window.doLogin(); });
@@ -596,6 +651,8 @@ function resetDate() { document.getElementById('entry-date').value = todayStr();
 
 // ── INIT ───────────────────────────────────────────────
 initDate();
+// הצג נתונים מקומיים מיד (לא מחכה ל-Firebase)
+renderSettings();
 
 // ── NAV ────────────────────────────────────────────────
 function goTo(page, el) {
@@ -1437,5 +1494,11 @@ document.getElementById('new-supplier-name').addEventListener('keydown',e=>{if(e
 document.getElementById('entry-amount').addEventListener('keydown',     e=>{if(e.key==='Enter')addEntry();});
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+// רישום Service Worker — אפליקציה עובדת אופליין
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(err => console.warn('SW failed:', err));
+}
+</script>
 </body>
 </html>
