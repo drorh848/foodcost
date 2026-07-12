@@ -4,6 +4,9 @@ const CACHE_NAME = 'foodcost-v1';
 const PRECACHE = [
   './',
   './index.html',
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png',
   'https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap',
   'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
   'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js',
