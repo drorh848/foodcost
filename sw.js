@@ -1,6 +1,6 @@
 // Service Worker — FoodCost offline support
-// גרסה 2.2
-const CACHE_NAME = 'foodcost-v4';
+// גרסה 2.3
+const CACHE_NAME = 'foodcost-v5';
 
 const PRECACHE = [
   './',
@@ -33,16 +33,30 @@ self.addEventListener('activate', event => {
   );
 });
 
-// בקשות — נסה רשת, אם אין קח מה-cache
+// בקשות — network first ל-HTML (תמיד גרסה חדשה), cache first לשאר
 self.addEventListener('fetch', event => {
   const url = event.request.url;
 
   // בקשות Firebase database (נתונים) — תמיד רשת, בלי cache
   if (url.includes('firebasedatabase.app') || url.includes('identitytoolkit') || url.includes('securetoken')) {
-    return; // תן לדפדפן לטפל רגיל
+    return;
   }
 
-  // כל השאר — cache first עם עדכון ברקע
+  // דף ה-HTML עצמו — network first: תמיד מנסה גרסה חדשה, cache רק בלי רשת
+  if (event.request.mode === 'navigate' || url.endsWith('index.html') || url.endsWith('/')) {
+    event.respondWith(
+      fetch(event.request).then(response => {
+        if (response && response.status === 200) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+        }
+        return response;
+      }).catch(() => caches.match(event.request).then(c => c || caches.match('./index.html')))
+    );
+    return;
+  }
+
+  // ספריות/פונטים/אייקונים — cache first עם עדכון ברקע
   event.respondWith(
     caches.match(event.request).then(cached => {
       const fetchPromise = fetch(event.request).then(response => {
