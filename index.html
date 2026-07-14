@@ -365,7 +365,7 @@
 
   <!-- VERSION -->
   <div style="text-align:center;padding:8px 0 24px;color:var(--text2);font-size:12px">
-    <div>גרסה <span id="app-version">2.0</span></div>
+    <div>גרסה <span id="app-version">2.1</span></div>
     <div id="pending-indicator" style="margin-top:4px"></div>
   </div>
 </div>
@@ -686,7 +686,15 @@ const DELETE_PASSWORD = '5555';
 const TRASH_DAYS      = 30;
 
 // ── SAVE ───────────────────────────────────────────────
-function saveLocal() { localStorage.setItem('expenseData', JSON.stringify(data)); }
+function saveLocal() {
+  try {
+    localStorage.setItem('expenseData', JSON.stringify(data));
+  } catch(e) {
+    // localStorage מלא (יותר מדי תמונות) — הנתונים עדיין בענן
+    toast('⚠️ הזיכרון המקומי מלא — הנתונים נשמרים בענן בלבד');
+    console.warn('localStorage full:', e);
+  }
+}
 
 async function saveAll() {
   // *** תמיד: שמור מקומית + סמן ממתין + חותמת זמן — לפני כל ניסיון ענן ***
@@ -795,13 +803,13 @@ function handleInvoiceSelect(e) {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
-      const MAX = 1200;
+      const MAX = 800;
       let w = img.width, h = img.height;
       if (w > MAX) { h = Math.round(h*MAX/w); w = MAX; }
       if (h > MAX) { w = Math.round(w*MAX/h); h = MAX; }
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      pendingInvoiceBase64 = canvas.toDataURL('image/jpeg', 0.75);
+      pendingInvoiceBase64 = canvas.toDataURL('image/jpeg', 0.6);
       document.getElementById('invoice-preview-img').src = pendingInvoiceBase64;
       document.getElementById('upload-area').style.display = 'none';
       document.getElementById('invoice-preview-wrap').style.display = 'block';
@@ -1039,13 +1047,13 @@ function handleEditInvoiceSelect(e) {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
-      const MAX = 1200;
+      const MAX = 800;
       let w = img.width, h = img.height;
       if (w > MAX) { h = Math.round(h*MAX/w); w = MAX; }
       if (h > MAX) { w = Math.round(w*MAX/h); h = MAX; }
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      editInvoiceBase64 = canvas.toDataURL('image/jpeg', 0.75);
+      editInvoiceBase64 = canvas.toDataURL('image/jpeg', 0.6);
       document.getElementById('edit-invoice-preview-img').src = editInvoiceBase64;
       document.getElementById('edit-upload-area').style.display = 'none';
       document.getElementById('edit-invoice-preview-wrap').style.display = 'block';
@@ -1365,7 +1373,15 @@ async function clearAll() {
 }
 
 // ── UTILS ──────────────────────────────────────────────
-function saveLocal() { localStorage.setItem('expenseData', JSON.stringify(data)); }
+function saveLocal() {
+  try {
+    localStorage.setItem('expenseData', JSON.stringify(data));
+  } catch(e) {
+    // localStorage מלא (יותר מדי תמונות) — הנתונים עדיין בענן
+    toast('⚠️ הזיכרון המקומי מלא — הנתונים נשמרים בענן בלבד');
+    console.warn('localStorage full:', e);
+  }
+}
 function todayStr()  { return new Date().toISOString().split('T')[0]; }
 function fmtAmount(n){ return n.toLocaleString('he-IL',{minimumFractionDigits:0,maximumFractionDigits:2}); }
 function formatDate(str) { return new Date(str+'T12:00:00').toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'numeric'}); }
