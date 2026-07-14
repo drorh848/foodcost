@@ -1,6 +1,6 @@
 // Service Worker — FoodCost offline support
-// גרסה 2.1
-const CACHE_NAME = 'foodcost-v3';
+// גרסה 2.2
+const CACHE_NAME = 'foodcost-v4';
 
 const PRECACHE = [
   './',
