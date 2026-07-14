@@ -365,7 +365,7 @@
 
   <!-- VERSION -->
   <div style="text-align:center;padding:8px 0 24px;color:var(--text2);font-size:12px">
-    <div>גרסה <span id="app-version">2.2</span></div>
+    <div>גרסה <span id="app-version">2.3</span></div>
     <div id="pending-indicator" style="margin-top:4px"></div>
   </div>
 </div>
@@ -587,6 +587,34 @@ onAuthStateChanged(auth, async (user) => {
   }
 });
 
+// ── מיזוג נתוני ענן עם מקומי — לפי מזהה, מקומי לעולם לא נמחק ──
+function mergeCloudData(fbData) {
+  let localOnly = 0;
+
+  // ספקים
+  const supMap = {};
+  (fbData.suppliers ? Object.values(fbData.suppliers) : []).forEach(s => { supMap[s.id] = s; });
+  data.suppliers.forEach(s => { if (!supMap[s.id]) { supMap[s.id] = s; localOnly++; } });
+  data.suppliers = Object.values(supMap);
+
+  // סל מיחזור — קודם, כדי שנדע מה נמחק בכוונה
+  const trMap = {};
+  (fbData.trash ? Object.values(fbData.trash) : []).forEach(t => { trMap[t.id] = t; });
+  data.trash.forEach(t => { if (!trMap[t.id]) { trMap[t.id] = t; localOnly++; } });
+  data.trash = Object.values(trMap);
+  const trashedIds = new Set(data.trash.map(t => t.id));
+
+  // הוצאות — רשומת ענן שנמצאת בסל המקומי לא חוזרת לחיים
+  const entMap = {};
+  (fbData.entries ? Object.values(fbData.entries) : []).forEach(e => {
+    if (!trashedIds.has(e.id)) entMap[e.id] = e;
+  });
+  data.entries.forEach(e => { if (!entMap[e.id] && !trashedIds.has(e.id)) { entMap[e.id] = e; localOnly++; } });
+  data.entries = Object.values(entMap).sort((a,b) => b.date.localeCompare(a.date) || (b.createdAt||0)-(a.createdAt||0));
+
+  return localOnly > 0;
+}
+
 // ── סנכרון בזמן אמת ──
 async function startRealtimeSync() {
   localStorage.setItem('wasLoggedIn', 'yes');
@@ -599,29 +627,21 @@ async function startRealtimeSync() {
   }
 
   onValue(ref(db, 'foodcost'), (snap) => {
-    // הגנה 1: שינויים ממתינים — לא דורסים, מעלים
-    if (hasPending()) {
-      if (navigator.onLine) {
-        pushLocalToCloud().then(ok => { if (ok) { toast('☁️ שינויים מאופליין הועלו לענן'); refreshCurrentView(); } });
-      }
-      return;
-    }
     if (snap.exists()) {
       const fbData = snap.val();
-      // הגנה 2: אם הנתונים המקומיים חדשים מהענן — לא דורסים, מעלים
-      const cloudTime = fbData.lastModified || 0;
-      const localTime = data.lastModified   || 0;
-      if (localTime > cloudTime) {
-        console.warn('Local data newer than cloud — pushing instead of overwriting');
-        pushLocalToCloud();
-        return;
-      }
-      data.suppliers    = fbData.suppliers ? Object.values(fbData.suppliers) : [];
-      data.entries      = fbData.entries   ? Object.values(fbData.entries).sort((a,b) => b.date.localeCompare(a.date)) : [];
-      data.trash        = fbData.trash     ? Object.values(fbData.trash) : [];
-      data.lastModified = cloudTime;
+      // ── מיזוג לפי מזהה — רשומה מקומית לעולם לא נמחקת ──
+      const needPush = mergeCloudData(fbData);
       saveLocal();
       refreshCurrentView();
+      if (needPush || hasPending()) {
+        // יש רשומות מקומיות שחסרות בענן — העלה אותן
+        pushLocalToCloud().then(ok => { if (ok) refreshCurrentView(); });
+        return;
+      }
+    } else if (hasPending()) {
+      // הענן ריק אבל יש נתונים מקומיים — העלה
+      pushLocalToCloud();
+      return;
     }
     setSyncStatus(navigator.onLine ? 'ok' : 'offline');
   }, (err) => {
@@ -850,7 +870,7 @@ async function addEntry() {
   if (!date)             { toast('⚠️ בחר תאריך'); return; }
   if (!amount||amount<=0){ toast('⚠️ הזן סכום תקין'); return; }
 
-  let entry = { id: 'e_'+Date.now(), date, amount, note, type: currentType, deleted: false };
+  let entry = { id: 'e_'+Date.now(), createdAt: Date.now(), date, amount, note, type: currentType, deleted: false };
   if (pendingInvoiceBase64) entry.invoice = pendingInvoiceBase64;
 
   if (currentType === 'regular') {
@@ -867,7 +887,7 @@ async function addEntry() {
   }
 
   data.entries.unshift(entry);
-  data.entries.sort((a,b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  data.entries.sort((a,b) => b.date.localeCompare(a.date) || (b.createdAt||0)-(a.createdAt||0));
   await saveAll();
 
   document.getElementById('entry-amount').value = '';
@@ -1102,7 +1122,7 @@ async function saveEdit() {
   if (editInvoiceBase64) e.invoice = editInvoiceBase64;
   else delete e.invoice;
 
-  data.entries.sort((a,b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  data.entries.sort((a,b) => b.date.localeCompare(a.date) || (b.createdAt||0)-(a.createdAt||0));
   await saveAll();
   closeEdit();
   renderHistory();
@@ -1401,6 +1421,11 @@ function saveLocal() {
 function todayStr()  { return new Date().toISOString().split('T')[0]; }
 function fmtAmount(n){ return n.toLocaleString('he-IL',{minimumFractionDigits:0,maximumFractionDigits:2}); }
 function formatDate(str) { return new Date(str+'T12:00:00').toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit',year:'numeric'}); }
+function formatCreated(e) {
+  if (!e.createdAt) return '';
+  const d = new Date(e.createdAt);
+  return ' · נוצר ' + d.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'});
+}
 function filterEntries(entries, f) {
   const now = new Date();
   return entries.filter(e => {
@@ -1570,7 +1595,7 @@ async function importExcel(event) {
           if (!val||val<=0) return;
           const sup = data.suppliers.find(s=>s.name===name);
           data.entries.push({
-            id:'e_'+Date.now()+'_'+Math.random().toString(36).slice(2),
+            id:'e_'+Date.now()+'_'+Math.random().toString(36).slice(2), createdAt: Date.now(),
             date:dateStr, amount:val, note:'', type:'regular', deleted:false,
             supplierId:sup?.id||'imported',
             supplierName:name, supplierEmoji:sup?.emoji||'🏭'
@@ -1582,7 +1607,7 @@ async function importExcel(event) {
           const otherVal = parseFloat(row[otherColIdx]);
           if (otherVal>0) {
             data.entries.push({
-              id:'e_'+Date.now()+'_'+Math.random().toString(36).slice(2),
+              id:'e_'+Date.now()+'_'+Math.random().toString(36).slice(2), createdAt: Date.now(),
               date:dateStr, amount:otherVal, note:'יובא מאקסל', type:'oneoff', deleted:false,
               supplierName:'אחר', supplierEmoji:'🛒'
             });
@@ -1591,7 +1616,7 @@ async function importExcel(event) {
         }
       }
 
-      data.entries.sort((a,b)=>b.date.localeCompare(a.date));
+      data.entries.sort((a,b)=>b.date.localeCompare(a.date) || (b.createdAt||0)-(a.createdAt||0));
       await saveAll();
       document.getElementById('import-input').value='';
       let msg = `✅ יובאו ${imported} רשומות`;
