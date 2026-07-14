@@ -362,6 +362,12 @@
     <div style="font-size:16px;font-weight:700;margin-bottom:10px">ניהול נתונים</div>
     <button class="btn btn-sm btn-danger" onclick="clearAll()" style="width:100%">🗑️ מחק את כל הנתונים</button>
   </div>
+
+  <!-- VERSION -->
+  <div style="text-align:center;padding:8px 0 24px;color:var(--text2);font-size:12px">
+    <div>גרסה <span id="app-version">2.0</span></div>
+    <div id="pending-indicator" style="margin-top:4px"></div>
+  </div>
 </div>
 
 </div><!-- /app-content -->
@@ -464,27 +470,58 @@ setPersistence(auth, browserLocalPersistence);
 
 let isLoggedIn    = false;
 let firstLoadDone = false;
+let pushInProgress = false;
 
-// ── דגל שינויים ממתינים (הוזנו אופליין וטרם עלו לענן) ──
-function markPending()  { localStorage.setItem('pendingSync', 'yes'); }
-function clearPending() { localStorage.removeItem('pendingSync'); }
 function hasPending()   { return localStorage.getItem('pendingSync') === 'yes'; }
+function clearPending() { localStorage.removeItem('pendingSync'); }
 
-// ── כתיבה ל-Firebase ──
+// ── העלאת כל הנתונים המקומיים לענן (עם timeout ואישור אמיתי) ──
+async function pushLocalToCloud() {
+  if (pushInProgress) return false;
+  if (!isLoggedIn || !navigator.onLine) { setSyncStatus('offline'); return false; }
+  pushInProgress = true;
+  try {
+    const supObj = {}; data.suppliers.forEach(s => { supObj[s.id] = s; });
+    const entObj = {}; data.entries.forEach(e => { entObj[e.id] = e; });
+    const trObj  = {}; data.trash.forEach(t => { trObj[t.id] = t; });
+    const payload = {
+      suppliers: supObj,
+      entries:   entObj,
+      trash:     trObj,
+      lastModified: data.lastModified || Date.now()
+    };
+    // timeout של 20 שניות — אם הרשת תקועה, לא מחכים לנצח
+    await Promise.race([
+      set(ref(db, 'foodcost'), payload),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000))
+    ]);
+    // הצליח באמת — עכשיו מותר לנקות את הדגל
+    clearPending();
+    setSyncStatus('ok');
+    return true;
+  } catch(e) {
+    console.warn('pushLocalToCloud failed:', e.message);
+    setSyncStatus('offline');
+    return false;
+  } finally {
+    pushInProgress = false;
+  }
+}
+window.pushAll = pushLocalToCloud;
+
+// ── כתיבה ל-Firebase (משמש לניקוי בלבד) ──
 window.fbSet = async (path, value) => {
   try {
     if (navigator.onLine && isLoggedIn) {
       await set(ref(db, path), value);
       setSyncStatus('ok');
     } else {
-      // אין רשת או עוד לא מחובר — סמן שיש שינויים ממתינים
-      markPending();
+      localStorage.setItem('pendingSync', 'yes');
       setSyncStatus('offline');
     }
   } catch(e) {
-    markPending();
+    localStorage.setItem('pendingSync', 'yes');
     setSyncStatus('offline');
-    console.error(e);
   }
 };
 
@@ -493,29 +530,10 @@ window.fbRemove = async (path) => {
     if (navigator.onLine && isLoggedIn) {
       await remove(ref(db, path));
     } else {
-      markPending();
+      localStorage.setItem('pendingSync', 'yes');
     }
-  } catch(e) { markPending(); console.error(e); }
+  } catch(e) { localStorage.setItem('pendingSync', 'yes'); }
 };
-
-// ── העלאת כל הנתונים המקומיים לענן (אחרי אופליין) ──
-async function pushLocalToCloud() {
-  try {
-    const supObj = {}; data.suppliers.forEach(s => { supObj[s.id] = s; });
-    const entObj = {}; data.entries.forEach(e => { entObj[e.id] = e; });
-    const trObj  = {}; data.trash.forEach(t => { trObj[t.id] = t; });
-    await set(ref(db, 'foodcost/suppliers'), supObj);
-    await set(ref(db, 'foodcost/entries'),   entObj);
-    await set(ref(db, 'foodcost/trash'),     trObj);
-    clearPending();
-    setSyncStatus('ok');
-    return true;
-  } catch(e) {
-    console.error('pushLocalToCloud failed', e);
-    setSyncStatus('offline');
-    return false;
-  }
-}
 
 // ── LOGIN ──────────────────────────────────────────────
 window.doLogin = async () => {
@@ -574,26 +592,34 @@ async function startRealtimeSync() {
   localStorage.setItem('wasLoggedIn', 'yes');
   setSyncStatus(navigator.onLine ? 'pending' : 'offline');
 
-  // *** קריטי: אם יש שינויים שהוזנו אופליין — קודם העלה אותם לענן ***
+  // אם יש שינויים ממתינים — קודם העלה אותם
   if (hasPending() && navigator.onLine) {
     const ok = await pushLocalToCloud();
     if (ok) toast('☁️ שינויים מאופליין הועלו לענן');
   }
 
-  // האזנה רציפה — כל שינוי ב-Firebase יורד מיד
   onValue(ref(db, 'foodcost'), (snap) => {
-    // אם יש שינויים ממתינים — אל תדרוס אותם! קודם העלה
+    // הגנה 1: שינויים ממתינים — לא דורסים, מעלים
     if (hasPending()) {
       if (navigator.onLine) {
-        pushLocalToCloud().then(ok => { if (ok) toast('☁️ שינויים מאופליין הועלו לענן'); });
+        pushLocalToCloud().then(ok => { if (ok) { toast('☁️ שינויים מאופליין הועלו לענן'); refreshCurrentView(); } });
       }
-      return; // לא דורסים נתונים מקומיים
+      return;
     }
     if (snap.exists()) {
       const fbData = snap.val();
-      data.suppliers = fbData.suppliers ? Object.values(fbData.suppliers) : [];
-      data.entries   = fbData.entries   ? Object.values(fbData.entries).sort((a,b) => b.date.localeCompare(a.date)) : [];
-      data.trash     = fbData.trash     ? Object.values(fbData.trash) : [];
+      // הגנה 2: אם הנתונים המקומיים חדשים מהענן — לא דורסים, מעלים
+      const cloudTime = fbData.lastModified || 0;
+      const localTime = data.lastModified   || 0;
+      if (localTime > cloudTime) {
+        console.warn('Local data newer than cloud — pushing instead of overwriting');
+        pushLocalToCloud();
+        return;
+      }
+      data.suppliers    = fbData.suppliers ? Object.values(fbData.suppliers) : [];
+      data.entries      = fbData.entries   ? Object.values(fbData.entries).sort((a,b) => b.date.localeCompare(a.date)) : [];
+      data.trash        = fbData.trash     ? Object.values(fbData.trash) : [];
+      data.lastModified = cloudTime;
       saveLocal();
       refreshCurrentView();
     }
@@ -602,6 +628,11 @@ async function startRealtimeSync() {
     setSyncStatus('offline');
     console.warn('Firebase offline, using local data');
   });
+
+  // ניסיון סנכרון כל 30 שניות אם יש ממתינים (רשת לא יציבה)
+  setInterval(() => {
+    if (hasPending() && navigator.onLine && isLoggedIn) pushLocalToCloud();
+  }, 30000);
 }
 
 function refreshCurrentView() {
@@ -658,20 +689,12 @@ const TRASH_DAYS      = 30;
 function saveLocal() { localStorage.setItem('expenseData', JSON.stringify(data)); }
 
 async function saveAll() {
+  // *** תמיד: שמור מקומית + סמן ממתין + חותמת זמן — לפני כל ניסיון ענן ***
+  data.lastModified = Date.now();
   saveLocal();
-  if (!window.fbSet) return;
-  // suppliers
-  const supObj = {};
-  data.suppliers.forEach(s => { supObj[s.id] = s; });
-  await window.fbSet('foodcost/suppliers', supObj);
-  // entries
-  const entObj = {};
-  data.entries.forEach(e => { entObj[e.id] = e; });
-  await window.fbSet('foodcost/entries', entObj);
-  // trash
-  const trashObj = {};
-  data.trash.forEach(t => { trashObj[t.id] = t; });
-  await window.fbSet('foodcost/trash', trashObj);
+  localStorage.setItem('pendingSync', 'yes');
+  // נסה להעלות — clearPending יקרה רק אם הצליח בפועל
+  if (window.pushAll) window.pushAll();
 }
 
 // ── DATE ───────────────────────────────────────────────
@@ -1300,9 +1323,19 @@ async function deleteSupplier(id) {
   toast('🗑️ ספק נמחק');
 }
 
+function updatePendingIndicator() {
+  const el = document.getElementById('pending-indicator');
+  if (!el) return;
+  const pending = localStorage.getItem('pendingSync') === 'yes';
+  el.innerHTML = pending
+    ? '<span style="color:var(--accent)">⏳ יש שינויים שממתינים לסנכרון</span>'
+    : '<span style="color:var(--green)">✅ הכל מסונכרן לענן</span>';
+}
+
 function renderSettings() {
   populateMonthSelector();
   renderTrash();
+  updatePendingIndicator();
   const el = document.getElementById('suppliers-list');
   if (!data.suppliers.length) {
     el.innerHTML = '<div style="color:var(--text2);font-size:13px;text-align:center;padding:10px">אין ספקים עדיין</div>';
