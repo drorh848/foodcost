@@ -189,7 +189,7 @@
 <div id="app-content">
 
 <nav class="nav">
-  <div class="nav-logo">💰 <span>הוצאות</span></div>
+  <div class="nav-logo">💰 <span>הוצאות</span> <span id="nav-sync" style="font-size:11px;font-weight:500;margin-right:6px"></span></div>
   <div class="nav-tabs">
     <button class="nav-tab active" onclick="goTo('add',this)">הוסף</button>
     <button class="nav-tab" onclick="goTo('history',this)">היסטוריה</button>
@@ -365,7 +365,7 @@
 
   <!-- VERSION -->
   <div style="text-align:center;padding:8px 0 24px;color:var(--text2);font-size:12px">
-    <div>גרסה <span id="app-version">2.1</span></div>
+    <div>גרסה <span id="app-version">2.2</span></div>
     <div id="pending-indicator" style="margin-top:4px"></div>
   </div>
 </div>
@@ -645,11 +645,26 @@ function refreshCurrentView() {
 
 function setSyncStatus(status) {
   const badge = document.getElementById('sync-badge');
-  if (!badge) return;
-  if (status === 'ok')      { badge.textContent = '✅ מסונכרן';        badge.className = 'sync-badge sync-ok'; }
-  if (status === 'pending') { badge.textContent = '⏳ מתחבר...';      badge.className = 'sync-badge sync-pending'; }
-  if (status === 'offline') { badge.textContent = '📴 אופליין (ישמר)'; badge.className = 'sync-badge sync-pending'; }
-  if (status === 'error')   { badge.textContent = '❌ שגיאה';         badge.className = 'sync-badge sync-error'; }
+  if (badge) {
+    if (status === 'ok')      { badge.textContent = '✅ מסונכרן';        badge.className = 'sync-badge sync-ok'; }
+    if (status === 'pending') { badge.textContent = '⏳ מתחבר...';      badge.className = 'sync-badge sync-pending'; }
+    if (status === 'offline') { badge.textContent = '📴 אופליין (ישמר)'; badge.className = 'sync-badge sync-pending'; }
+    if (status === 'error')   { badge.textContent = '❌ שגיאה';         badge.className = 'sync-badge sync-error'; }
+  }
+  // מחוון בשורת הניווט — נראה בכל הדפים
+  const nav = document.getElementById('nav-sync');
+  if (nav) {
+    const pending = localStorage.getItem('pendingSync') === 'yes';
+    if (pending) {
+      nav.textContent = '⏳ ממתין לסנכרון';
+      nav.style.color = 'var(--accent)';
+    } else {
+      nav.textContent = '☁️ מסונכרן';
+      nav.style.color = 'var(--green)';
+    }
+  }
+  // עדכן גם את המחוון בהגדרות
+  if (typeof updatePendingIndicator === 'function') updatePendingIndicator();
 }
 window.setSyncStatus = setSyncStatus;
 
@@ -701,6 +716,7 @@ async function saveAll() {
   data.lastModified = Date.now();
   saveLocal();
   localStorage.setItem('pendingSync', 'yes');
+  if (window.setSyncStatus) window.setSyncStatus('offline'); // עדכן מחוון מיד
   // נסה להעלות — clearPending יקרה רק אם הצליח בפועל
   if (window.pushAll) window.pushAll();
 }
