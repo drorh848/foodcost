@@ -365,7 +365,7 @@
 
   <!-- VERSION -->
   <div style="text-align:center;padding:8px 0 24px;color:var(--text2);font-size:12px">
-    <div>גרסה <span id="app-version">2.3</span></div>
+    <div>גרסה <span id="app-version">2.4</span></div>
     <div id="pending-indicator" style="margin-top:4px"></div>
   </div>
 </div>
@@ -479,6 +479,7 @@ function clearPending() { localStorage.removeItem('pendingSync'); }
 async function pushLocalToCloud() {
   if (pushInProgress) return false;
   if (!isLoggedIn || !navigator.onLine) { setSyncStatus('offline'); return false; }
+  if (typeof dataReady !== 'undefined') await dataReady; // אל תדחוף לפני שהמקומי נטען
   pushInProgress = true;
   try {
     const supObj = {}; data.suppliers.forEach(s => { supObj[s.id] = s; });
@@ -617,6 +618,9 @@ function mergeCloudData(fbData) {
 
 // ── סנכרון בזמן אמת ──
 async function startRealtimeSync() {
+  // *** חכה שהנתונים המקומיים נטענו מ-IndexedDB לפני כל סנכרון ***
+  if (typeof dataReady !== 'undefined') await dataReady;
+
   localStorage.setItem('wasLoggedIn', 'yes');
   setSyncStatus(navigator.onLine ? 'pending' : 'offline');
 
@@ -706,7 +710,71 @@ document.getElementById('login-password').addEventListener('keydown', e => { if 
 
 <script>
 // ── STATE ──────────────────────────────────────────────
-let data = JSON.parse(localStorage.getItem('expenseData') || '{"suppliers":[],"entries":[],"trash":[]}');
+// ── IndexedDB — אחסון מקומי גדול (ג'יגה-בייטים, לא 5MB) ──
+let data = { suppliers: [], entries: [], trash: [] };
+let idb = null;
+
+function idbOpen() {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open('foodcostDB', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('kv');
+    req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error);
+  });
+}
+
+function idbGet(key) {
+  return new Promise((res) => {
+    if (!idb) return res(null);
+    const tx = idb.transaction('kv', 'readonly').objectStore('kv').get(key);
+    tx.onsuccess = () => res(tx.result || null);
+    tx.onerror = () => res(null);
+  });
+}
+
+function idbSet(key, value) {
+  return new Promise((res) => {
+    if (!idb) return res(false);
+    const tx = idb.transaction('kv', 'readwrite').objectStore('kv').put(value, key);
+    tx.onsuccess = () => res(true);
+    tx.onerror = () => res(false);
+  });
+}
+
+// טעינה ראשונית: IndexedDB, ואם ריק — העברה חד-פעמית מ-localStorage
+let dataReady = (async () => {
+  try {
+    idb = await idbOpen();
+    let stored = await idbGet('expenseData');
+    if (!stored) {
+      // העברה מ-localStorage (גרסאות קודמות)
+      const legacy = localStorage.getItem('expenseData');
+      if (legacy) {
+        stored = JSON.parse(legacy);
+        await idbSet('expenseData', stored);
+      }
+    }
+    if (stored) {
+      data.suppliers    = stored.suppliers || [];
+      data.entries      = stored.entries   || [];
+      data.trash        = stored.trash     || [];
+      data.lastModified = stored.lastModified || 0;
+    }
+  } catch(e) {
+    console.error('IndexedDB init failed, falling back to localStorage', e);
+    try {
+      const legacy = JSON.parse(localStorage.getItem('expenseData') || '{}');
+      data.suppliers = legacy.suppliers || [];
+      data.entries   = legacy.entries   || [];
+      data.trash     = legacy.trash     || [];
+    } catch(_) {}
+  }
+  // רענן תצוגה אחרי טעינה
+  renderSettings();
+  const active = document.querySelector('.page.active');
+  if (active && active.id === 'page-history') renderHistory();
+  if (active && active.id === 'page-summary') renderSummary();
+})();
 if (!data.suppliers) data.suppliers = [];
 if (!data.entries)   data.entries   = [];
 if (!data.trash)     data.trash     = [];
@@ -722,13 +790,10 @@ const TRASH_DAYS      = 30;
 
 // ── SAVE ───────────────────────────────────────────────
 function saveLocal() {
-  try {
-    localStorage.setItem('expenseData', JSON.stringify(data));
-  } catch(e) {
-    // localStorage מלא (יותר מדי תמונות) — הנתונים עדיין בענן
-    toast('⚠️ הזיכרון המקומי מלא — הנתונים נשמרים בענן בלבד');
-    console.warn('localStorage full:', e);
-  }
+  // IndexedDB — אין מגבלת 5MB
+  idbSet('expenseData', JSON.parse(JSON.stringify(data))).then(ok => {
+    if (!ok) console.warn('IndexedDB save failed');
+  });
 }
 
 async function saveAll() {
@@ -1410,13 +1475,10 @@ async function clearAll() {
 
 // ── UTILS ──────────────────────────────────────────────
 function saveLocal() {
-  try {
-    localStorage.setItem('expenseData', JSON.stringify(data));
-  } catch(e) {
-    // localStorage מלא (יותר מדי תמונות) — הנתונים עדיין בענן
-    toast('⚠️ הזיכרון המקומי מלא — הנתונים נשמרים בענן בלבד');
-    console.warn('localStorage full:', e);
-  }
+  // IndexedDB — אין מגבלת 5MB
+  idbSet('expenseData', JSON.parse(JSON.stringify(data))).then(ok => {
+    if (!ok) console.warn('IndexedDB save failed');
+  });
 }
 function todayStr()  { return new Date().toISOString().split('T')[0]; }
 function fmtAmount(n){ return n.toLocaleString('he-IL',{minimumFractionDigits:0,maximumFractionDigits:2}); }
